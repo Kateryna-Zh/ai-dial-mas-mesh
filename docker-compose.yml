@@ -3,12 +3,13 @@ services:
     image: epam/ai-dial-chat-themes:development
     ports:
       - "3001:8080"
+    platform: linux/amd64
 
   chat:
     ports:
       - "3000:3000"
     image: epam/ai-dial-chat:development
-#    platform: linux/amd64
+    platform: linux/amd64
     depends_on:
       - themes
       - core
@@ -33,11 +34,13 @@ services:
       --appendonly no
       --loglevel warning
     mem_limit: 2200M
+    platform: linux/amd64
 
   redis-insight:
     image: redislabs/redisinsight:latest
     ports:
       - "6380:5540"
+    platform: linux/amd64
 
   core:
     user: ${UID:-root}
@@ -60,12 +63,14 @@ services:
       - ${DIAL_DIR:-.}/core:/opt/config
       - ${DIAL_DIR:-.}/core-logs/:/app/log
       - ${DIAL_DIR:-.}/core-data/:/app/data
+    platform: linux/amd64
 
   adapter-dial:
     image: epam/ai-dial-adapter-dial:development
     environment:
       DIAL_URL: "http://core:8080"
       LOG_LEVEL: "INFO"
+    platform: linux/amd64
 
   python-interpreter-mcp-server:
     image: khshanovskyi/python-code-interpreter-mcp-server:latest
@@ -76,6 +81,7 @@ services:
     restart: unless-stopped
     mem_limit: 2G
     cpus: 2.0
+    platform: linux/amd64
 
   ddg-search-mcp-server:
     image: khshanovskyi/ddg-mcp-server:latest
@@ -87,3 +93,4 @@ services:
     restart: unless-stopped
     mem_limit: 512M
     cpus: 0.5
+    platform: linux/amd64

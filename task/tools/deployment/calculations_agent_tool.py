@@ -11,5 +11,31 @@ class CalculationsAgentTool(BaseAgentTool):
     # Parameters:
     #   - prompt: string. Required.
     #   - propagate_history: boolean
-    raise NotImplementedError()
+    @property
+    def deployment_name(self) -> str:
+        return "calculations-agent"
 
+    @property
+    def name(self) -> str:
+        return "calculations_agent"
+
+    @property
+    def description(self) -> str:
+        return "Calculations Agent. Primary goal to to work with calculations. Capable to make plotly graphics and chart bars. Equipped with: Python Code Interpreter (via MCP), and Simple calculator."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "The prompt for the calculations agent.",
+                },
+                "propagate_history": {
+                    "type": "boolean",
+                    "description": "Whether to propagate conversation history.",
+                }
+            },
+            "required": ["prompt"]
+        }

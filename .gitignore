@@ -1,0 +1,16 @@
+task/__pycache__/
+task/agents/__pycache__/
+task/agents/calculations/__pycache__/
+task/agents/calculations/tools/__pycache__/
+task/agents/calculations/tools/py_interpreter/__pycache__/
+task/agents/content_management/__pycache__/
+task/agents/content_management/tools/__pycache__/
+task/agents/content_management/tools/files/__pycache__/
+task/agents/content_management/tools/rag/__pycache__/
+task/agents/web_search/__pycache__/
+task/tools/__pycache__/
+task/tools/deployment/__pycache__/
+task/tools/mcp/__pycache__/
+task/utils/__pycache__/
+core-data/
+core-logs/

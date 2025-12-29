@@ -27,6 +27,11 @@ class BaseAgentTool(BaseTool, ABC):
         # 1. All the agents that will used as tools will have two parameters in request:
         #   - `prompt` (the request to agent)
         #   - `propagate_history`, boolean whether we need to propagate the history of communication with called agent
+        stage = tool_call_params.stage
+        args = tool_call_params.tool_call.function.arguments
+        json_args = json.loads(args)
+        if prompt := json_args.get("prompt"):
+            stage.append_name(f"{prompt}")
         # 2. Use AsyncDial (api_version='2025-01-01-preview'), call the agent with steaming option.
         #    Here, actually, you can find one of the most powerful features of DIAL - Unified protocol. All the
         #    applications that provide `/chat/completions` endpoint and following Unified protocol - can `communicate`
@@ -37,26 +42,88 @@ class BaseAgentTool(BaseTool, ABC):
         #    the same way we are working with applications, the application that makes a call provide the conversation history.
         #    ⚠️ To provide proper message history you need to implement the `_prepare_messages` method!
         #    ⚠️ Don't forget to include as extra_headers `x-conversation-id`!
+        dial_client = AsyncDial(
+            base_url=self.endpoint,
+            api_key=tool_call_params.api_key,
+            api_version='2025-01-01-preview'
+        )
+
+        chunks = await dial_client.chat.completions.create(
+            messages=self._prepare_messages(tool_call_params),
+            stream=True,
+            deployment_name=self.deployment_name,
+            extra_body={
+                "custom_fields": {
+                    "configuration": {**json_args}
+                }
+            },
+            extra_headers={
+                "x-conversation-id": tool_call_params.conversation_id
+            }
+        )
         # 3. Prepare:
         #   - `content` variable, here we will collect the streamed content
         #   - `custom_content: CustomContent` variable, here we will collect variable CustomContent from agent response
         #   - `stages_map: dict[int, Stage]` variable, here will be persisted propagated stages
+        content = ''
+        custom_content: CustomContent = CustomContent(attachments=[])
+        stages_map: dict[int, Stage] = {}
         # 4. Iterate through chunks and:
+        async for chunk in chunks:
         #   - Stream content to the Stage (from tool_call_params) for this tool call
+            if chunk.choices and len(chunk.choices) > 0:
+                delta = chunk.choices[0].delta
+                if delta and delta.content:
+                    content += delta.content
+                    stage.append_content(delta.content)
         #   - For custom_content:
+                if delta_custom_content := delta.custom_content:
+                   
         #       - set `state` from response CustomContent to the `custom_content`
+                    if delta_custom_content.state:
+                        custom_content.state = delta_custom_content.state
         #       - in attachments are found propagate them to choice
+                    if delta_custom_content.attachments:
+                        if custom_content.attachments is None:
+                            custom_content.attachments = []
+                        custom_content.attachments.extend(delta_custom_content.attachments)
         #       - Optional:
         #           Stages propagation: convert response CustomContent to dict and if stages are present:
+                    custom_content_dict = delta_custom_content.dict(exclude_none=True)
+                    if stages := custom_content_dict.get("stages"):
+                        for stg in stages:
         #           - each Stage has it is `index`, it will be returned in each chunk. If stage by such index is present
         #             in `stages_map` then you need to propagate content, otherwise you need to create stage
+                            stage_index = stg.get("index")
+                            if opened_stage := stages_map.get(stage_index):
         #           - propagate stage name from response to propagated stage name, the same story for `content` and `attachments`
+                                if stg_name := stg.get("name"):
+                                    opened_stage.append_name(stg_name)
+                                elif stg_content := stg.get("content"):
+                                    opened_stage.append_content(stg_content)
+                                elif stg_attachments := stg.get("attachments"):
+                                    for stg_attachment in stg_attachments:
+                                        opened_stage.add_attachment(Attachment(**stg_attachment))
         #           - if response stage has `status = completed` - we need to close such stage
+                                elif stg_status := stg.get("status") == "completed":
+                                    StageProcessor.close_stage_safely(stages_map[stage_index])
+                            else:
+                                stages_map[stage_index] = StageProcessor.open_stage(tool_call_params.choice, stg.get("name"))
         # 5. Ensure that stages are closed (just iterate through them and close safely with StageProcessor)
-        # 6. Return Tool message
+        for stage in stages_map.values():
+            StageProcessor.close_stage_safely(stage)
         #    ⚠️ Remember, tool message must have tool call id, also don't forget to add `custom_content` since we need
         #       to save properly tool history to choice state later
-        raise NotImplementedError()
+        for attachment in custom_content.attachments:
+            tool_call_params.choice.add_attachment(
+                Attachment(**attachment.dict(exclude_none=True))
+            )
+        return Message(
+            role=Role.TOOL,
+            content=StrictStr(content),
+            custom_content=custom_content,
+            tool_call_id=StrictStr(tool_call_params.tool_call.id)
+        )
 
     def _prepare_messages(self, tool_call_params: ToolCallParams) -> list[dict[str, Any]]:
         #TODO:
@@ -66,8 +133,13 @@ class BaseAgentTool(BaseTool, ABC):
         #   - Propagate whole Per-To-Per history between this Agent and the Agent that we are calling
         # ---
         # 1. Get: `prompt` and `propagate_history` params from tool call
+        json_args = json.loads(tool_call_params.tool_call.function.arguments) 
+        prompt = json_args.get("prompt")
+        propagate_history = json_args.get("propagate_history", False)
         # 2. Prepare empty `messages` array, here we will collect history with Per-To-Per communication between this
         #    agent and the agent that we are colling
+        messages = []
+        if propagate_history:
         # 3. Collect the proper history, iterate through messages and:
         #   - In Assistant messages presented the state with tool_call_history, we need to properly unpack it. If message
         #   from assistant and in custom content present state and in this state present history for this `self.name`
@@ -75,5 +147,24 @@ class BaseAgentTool(BaseTool, ABC):
         #   firstly add to `messages` user message that is going before the assistant message and then add assistant
         #   message. For assistant message you need to make a deepcopy and refactor the state for copied message, instead
         #   of the whole state you need to get from the state value by `self.name`
+            for i in range(len(tool_call_params.messages)):
+                msg = tool_call_params.messages[i]
+                if msg.role == Role.ASSISTANT:
+                    if msg.custom_content and msg.custom_content.state:
+                        if agent_tool_history := msg.custom_content.state.get(self.name):
+                            user_msg = tool_call_params.messages[i - 1]
+                            messages.append(deepcopy(user_msg).dict(exclude_none=True))
+                            
+                            assistant_msg = deepcopy(msg)
+                            assistant_msg.custom_content.state = agent_tool_history
+                            messages.append(assistant_msg.dict(exclude_none=True))
         # 4. Lastly, add the user message with `prompt` and don't forget about the custom_content
-        raise NotImplementedError()
+        custom_content = tool_call_params.messages[-1].custom_content
+        messages.append(
+            {
+                "role": Role.USER,
+                "content": prompt,
+                "custom_content": custom_content.dict(exclude_none=True) if custom_content else None
+            }
+        )
+        return messages
